@@ -24,19 +24,14 @@ import (
 // path when mounting handlers on muxes.
 func extractProtoPath(url string) string {
 	segments := strings.Split(url, "/")
-	var pkg, method string
-	if len(segments) > 0 {
-		pkg = segments[0]
-	}
-	if len(segments) > 1 {
-		pkg = segments[len(segments)-2]
-		method = segments[len(segments)-1]
-	}
-	if pkg == "" {
+	switch segmentsLen := len(segments); {
+	case segmentsLen > 1:
+		pkg, method := segments[segmentsLen-2], segments[segmentsLen-1]
+		return "/" + pkg + "/" + method
+	case segmentsLen == 1:
+		pkg := segments[0]
+		return "/" + pkg
+	default:
 		return "/"
 	}
-	if method == "" {
-		return "/" + pkg
-	}
-	return "/" + pkg + "/" + method
 }

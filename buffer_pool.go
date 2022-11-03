@@ -21,7 +21,7 @@ import (
 
 const (
 	initialBufferSize    = 512
-	maxRecycleBufferSize = 8 * 1024 * 1024 // if >8MiB, don't hold onto a buffer
+	maxRecycleBufferSize = 8 << 20 // if >8MiB, don't hold onto a buffer
 )
 
 type bufferPool struct {
@@ -38,11 +38,15 @@ func newBufferPool() *bufferPool {
 	}
 }
 
+// When the pool is empty, Get returns the result of calling New, so the initialization code does not need to be repeated
+// here.
+// The type assertion is also redundant because bufferPool.Put accepts only *bytes.Buffer. It may also mislead readers
+// to believe that the pool may contain non-bytes.Buffer pointers, especially because there's another branch of code
+// that returns a newly initialized buffer when the type assertion fails.
+
+// This will be much cleaner after https://github.com/golang/go/discussions/48287.
 func (b *bufferPool) Get() *bytes.Buffer {
-	if buf, ok := b.Pool.Get().(*bytes.Buffer); ok {
-		return buf
-	}
-	return bytes.NewBuffer(make([]byte, 0, initialBufferSize))
+	return b.Pool.Get().(*bytes.Buffer)
 }
 
 func (b *bufferPool) Put(buffer *bytes.Buffer) {

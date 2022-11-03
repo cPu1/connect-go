@@ -77,8 +77,14 @@ func newDuplexHTTPCall(
 		// We can't construct a request, so we definitely can't send it over the
 		// network. Exhaust the sync.Once immediately and short-circuit Read and
 		// Write by setting an error.
+
+		// Exhausting sendRequestOnce here will cause makeRequest to never be called and the responseReady channel will never be closed,
+		// resulting in the calling go-routine to wait indefinitely and deadlock when BlockUntilResponseReady is called. If this causes the entire program to be deadlocked,
+		// the Go runtime will terminate the process with a non-zero exit status.
 		client.sendRequestOnce.Do(func() {})
 		connectErr := errorf(CodeUnavailable, "construct *http.Request: %w", err)
+
+		// SetError guards access to err with a mutex, but for this call it isn't required because no other go-routine has access to client yet.
 		client.SetError(connectErr)
 	}
 	return client
@@ -105,7 +111,7 @@ func (d *duplexHTTPCall) Write(data []byte) (int, error) {
 	return bytesWritten, err
 }
 
-// Close the request body. Callers *must* call CloseWrite before Read when
+// CloseWrite closes the request body. Callers *must* call CloseWrite before Read when
 // using HTTP/1.x.
 func (d *duplexHTTPCall) CloseWrite() error {
 	// Even if Write was never called, we need to make an HTTP request. This
@@ -228,13 +234,20 @@ func (d *duplexHTTPCall) BlockUntilResponseReady() {
 	<-d.responseReady
 }
 
+// When the call to ensureRequestMade returns, it does not actually guarantee that the request has been made because the
+// function passed to sync.Do spawns a new go-routine to run makeRequest. Once.Do guarantees that the supplied
+// function runs exactly once and the call to Do returns when the call to the supplied function returns. But since the function starts
+// a new go-routine, the call to Do will return immediately, possibly even before it has executed its first statement
+// let alone run to completion.
 func (d *duplexHTTPCall) ensureRequestMade() {
 	d.sendRequestOnce.Do(func() {
-		go d.makeRequest()
+		if err := d.makeRequest(); err != nil {
+			d.SetError(err)
+		}
 	})
 }
 
-func (d *duplexHTTPCall) makeRequest() {
+func (d *duplexHTTPCall) makeRequest() error {
 	// This runs concurrently with Write and CloseWrite. Read and CloseRead wait
 	// on d.responseReady, so we can't race with them.
 	defer close(d.responseReady)
@@ -250,25 +263,24 @@ func (d *duplexHTTPCall) makeRequest() {
 		if _, ok := asError(err); !ok {
 			err = NewError(CodeUnavailable, err)
 		}
-		d.SetError(err)
-		return
+		return err
 	}
 	d.response = response
 	if err := d.validateResponse(response); err != nil {
-		d.SetError(err)
-		return
+		return err
 	}
 	if (d.streamType&StreamTypeBidi) == StreamTypeBidi && response.ProtoMajor < 2 {
 		// If we somehow dialed an HTTP/1.x server, fail with an explicit message
 		// rather than returning a more cryptic error later on.
-		d.SetError(errorf(
+		return errorf(
 			CodeUnimplemented,
 			"response from %v is HTTP/%d.%d: bidi streams require at least HTTP/2",
 			d.request.URL,
 			response.ProtoMajor,
 			response.ProtoMinor,
-		))
+		)
 	}
+	return nil
 }
 
 func (d *duplexHTTPCall) getError() error {

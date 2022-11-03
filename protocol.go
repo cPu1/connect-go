@@ -30,7 +30,7 @@ const (
 	headerContentType = "Content-Type"
 	headerUserAgent   = "User-Agent"
 
-	discardLimit = 1024 * 1024 * 4 // 4MiB
+	discardLimit = 4 << 20 // 4MiB
 )
 
 var errNoTimeout = errors.New("no timeout")

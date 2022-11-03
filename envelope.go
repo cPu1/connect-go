@@ -181,12 +181,28 @@ func (r *envelopeReader) Unmarshal(message any) *Error {
 }
 
 func (r *envelopeReader) Read(env *envelope) *Error {
-	prefixes := [5]byte{}
-	prefixBytesRead, err := r.reader.Read(prefixes[:])
+	// The contract for io.Reader says that Read can return n < p with a nil error if some data is available but not
+	// len(p). This is not an error condition and can likely happen, e.g., in a TCP connection if the entire data isn't
+	// written and the send buffer is flushed, or when TCP_NODELAY is enabled.
+	// A more accurate way to read n bytes from a Reader is:
+
+	var (
+		prefixes [5]byte
+		prefixBytesRead = 0
+		err             error
+	)
+	for {
+		var n int
+		n, err = r.reader.Read(prefixes[prefixBytesRead:])
+		prefixBytesRead += n
+		if err != nil || prefixBytesRead == len(prefixes) {
+			break
+		}
+	}
 
 	switch {
 	case (err == nil || errors.Is(err, io.EOF)) &&
-		prefixBytesRead == 5 &&
+		prefixBytesRead == len(prefixes) &&
 		isSizeZeroPrefix(prefixes):
 		// Successfully read prefix and expect no additional data.
 		env.Flags = prefixes[0]
@@ -255,7 +271,7 @@ func (r *envelopeReader) Read(env *envelope) *Error {
 }
 
 func isSizeZeroPrefix(prefix [5]byte) bool {
-	for i := 1; i < 5; i++ {
+	for i := 1; i < len(prefix); i++ {
 		if prefix[i] != 0 {
 			return false
 		}
